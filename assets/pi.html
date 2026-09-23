@@ -6,15 +6,102 @@
 				font-family: system-ui, sans-serif;
 				font-size: 13px;
 				color: oklch(78% 0 0);
+				box-sizing: border-box;
 			}
 			body {
 				margin: 16px;
 				background-color: oklch(26.9% 0 0);
 			}
+			.hint {
+				margin-bottom: 16px;
+			}
+			.row {
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 8px 0;
+				border-top: 1px solid oklch(35% 0 0);
+			}
+			select {
+				background-color: oklch(30% 0 0);
+				color: inherit;
+				border: 1px solid oklch(40% 0 0);
+				border-radius: 4px;
+				padding: 4px 6px;
+			}
+			input[type="checkbox"] {
+				width: 16px;
+				height: 16px;
+			}
 		</style>
 	</head>
 
 	<body>
-		<div>Reads local Claude Code usage from <code>~/.claude</code> on this machine. No configuration needed.</div>
+		<div class="hint">Reads local Claude Code usage from <code>~/.claude</code> on this machine. No API key needed.</div>
+
+		<div class="row">
+			<label for="textScale">Text size</label>
+			<select id="textScale">
+				<option value="1">Normal</option>
+				<option value="1.25">Large</option>
+				<option value="1.5">Extra large</option>
+			</select>
+		</div>
+
+		<div class="row">
+			<label for="bold">Bold</label>
+			<input type="checkbox" id="bold" />
+		</div>
+
+		<script>
+			let uuid = null;
+			let settings = { bold: false, text_scale: 1 };
+
+			function applyToForm() {
+				document.getElementById("textScale").value = String(settings.text_scale ?? 1);
+				document.getElementById("bold").checked = Boolean(settings.bold);
+			}
+
+			function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, inActionInfo) {
+				uuid = inUUID;
+				const socket = new WebSocket("ws://127.0.0.1:" + inPort);
+
+				socket.onopen = () => {
+					socket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+
+					const actionInfo = JSON.parse(inActionInfo);
+					settings = Object.assign({}, settings, actionInfo.payload.settings);
+					applyToForm();
+				};
+
+				socket.onmessage = (message) => {
+					const event = JSON.parse(message.data);
+					if (event.event === "didReceiveSettings") {
+						settings = Object.assign({}, settings, event.payload.settings);
+						applyToForm();
+					}
+				};
+
+				function save() {
+					socket.send(
+						JSON.stringify({
+							event: "setSettings",
+							context: uuid,
+							payload: settings,
+						})
+					);
+				}
+
+				document.getElementById("textScale").addEventListener("change", (e) => {
+					settings.text_scale = parseFloat(e.target.value);
+					save();
+				});
+
+				document.getElementById("bold").addEventListener("change", (e) => {
+					settings.bold = e.target.checked;
+					save();
+				});
+			}
+		</script>
 	</body>
 </html>

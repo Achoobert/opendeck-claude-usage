@@ -15,8 +15,35 @@ const REFETCH_INTERVAL: Duration = Duration::from_secs(300);
 /// How often the ticker wakes up to look for stale metrics.
 const TICK_INTERVAL: Duration = Duration::from_secs(60);
 
-#[derive(Serialize, Deserialize, Clone, Default)]
-struct EmptySettings;
+/// Per-instance display formatting, configured from the property inspector.
+/// Not exposed by the `openaction` crate outside action callbacks, so it's
+/// mirrored into `DISPLAY_SETTINGS` (keyed by instance id) for the background
+/// ticker to read when it re-renders a key without a fresh settings event.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[serde(default)]
+struct DisplaySettings {
+	bold: bool,
+	/// Font-size multiplier applied to both the label and amount text. `1.0` is
+	/// the original size; the property inspector offers 1.0/1.25/1.5 ("Normal"
+	/// / "Large" / "Extra Large").
+	text_scale: f64,
+}
+
+impl Default for DisplaySettings {
+	fn default() -> Self {
+		Self { bold: false, text_scale: 1.0 }
+	}
+}
+
+static DISPLAY_SETTINGS: LazyLock<Mutex<HashMap<InstanceId, DisplaySettings>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn remember_settings(instance_id: &str, settings: &DisplaySettings) {
+	DISPLAY_SETTINGS.lock().unwrap().insert(instance_id.to_string(), *settings);
+}
+
+fn recall_settings(instance_id: &str) -> DisplaySettings {
+	DISPLAY_SETTINGS.lock().unwrap().get(instance_id).copied().unwrap_or_default()
+}
 
 /// Which usage window a key is showing. Shared across all instances of the
 /// same metric so they don't each rescan the filesystem independently.
@@ -274,13 +301,24 @@ fn format_tokens(tokens: u64) -> String {
 	}
 }
 
-fn render_svg(label: &str, amount: &str) -> String {
+fn render_svg(label: &str, amount: &str, settings: DisplaySettings) -> String {
+	let scale = settings.text_scale;
+	let label_size = 12.0 * scale;
+	let amount_size = 26.0 * scale;
+	let label_weight = if settings.bold { "bold" } else { "600" };
+	// The amount is already bold at the default scale; a bolder stroke is the
+	// only headroom left for the "increase formatting" ask on that line.
+	let amount_stroke = if settings.bold { r##" stroke="#2ecc71" stroke-width="0.5""## } else { "" };
 	format!(
 		r##"<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
-  <text x="72" y="62" text-anchor="middle" fill="#9a9a9a" font-family="sans-serif" font-size="12" font-weight="600">{label}</text>
-  <text x="72" y="98" text-anchor="middle" fill="#2ecc71" font-family="sans-serif" font-size="26" font-weight="bold">{amount}</text>
+  <text x="72" y="62" text-anchor="middle" fill="#9a9a9a" font-family="sans-serif" font-size="{label_size}" font-weight="{label_weight}">{label}</text>
+  <text x="72" y="98" text-anchor="middle" fill="#2ecc71" font-family="sans-serif" font-size="{amount_size}" font-weight="bold"{amount_stroke}>{amount}</text>
 </svg>"##,
+		label_size = label_size,
+		label_weight = label_weight,
 		label = label,
+		amount_size = amount_size,
+		amount_stroke = amount_stroke,
 		amount = amount,
 	)
 }
@@ -309,14 +347,14 @@ async fn send_image(instance: &Instance, svg: &str, label: &str) {
 	}
 }
 
-async fn render_metric(instance: &Instance, metric: Metric, mode: RenderMode, label: &str, force: bool) {
+async fn render_metric(instance: &Instance, metric: Metric, mode: RenderMode, label: &str, force: bool, settings: DisplaySettings) {
 	match get_usage(metric, force) {
 		Ok(totals) => {
 			let amount = match mode {
 				RenderMode::Cost => format_currency(totals.cost),
 				RenderMode::Tokens => format_tokens(totals.tokens),
 			};
-			send_image(instance, &render_svg(label, &amount), label).await;
+			send_image(instance, &render_svg(label, &amount, settings), label).await;
 		}
 		Err(e) => {
 			log::warn!("[{}] render_metric({label}): {}", instance.instance_id, e);
@@ -330,15 +368,22 @@ struct TodayAction;
 #[async_trait]
 impl Action for TodayAction {
 	const UUID: ActionUuid = "com.achoobert.claudeusage.today";
-	type Settings = EmptySettings;
+	type Settings = DisplaySettings;
 
-	async fn will_appear(&self, instance: &Instance, _settings: &Self::Settings) -> OpenActionResult<()> {
-		render_metric(instance, Metric::Today, RenderMode::Cost, "TODAY", false).await;
+	async fn will_appear(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		remember_settings(&instance.instance_id, settings);
+		render_metric(instance, Metric::Today, RenderMode::Cost, "TODAY", false, *settings).await;
 		Ok(())
 	}
 
-	async fn key_up(&self, instance: &Instance, _settings: &Self::Settings) -> OpenActionResult<()> {
-		render_metric(instance, Metric::Today, RenderMode::Cost, "TODAY", true).await;
+	async fn key_up(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		render_metric(instance, Metric::Today, RenderMode::Cost, "TODAY", true, *settings).await;
+		Ok(())
+	}
+
+	async fn did_receive_settings(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		remember_settings(&instance.instance_id, settings);
+		render_metric(instance, Metric::Today, RenderMode::Cost, "TODAY", false, *settings).await;
 		Ok(())
 	}
 }
@@ -348,15 +393,22 @@ struct MonthAction;
 #[async_trait]
 impl Action for MonthAction {
 	const UUID: ActionUuid = "com.achoobert.claudeusage.month";
-	type Settings = EmptySettings;
+	type Settings = DisplaySettings;
 
-	async fn will_appear(&self, instance: &Instance, _settings: &Self::Settings) -> OpenActionResult<()> {
-		render_metric(instance, Metric::Month, RenderMode::Cost, "MONTH", false).await;
+	async fn will_appear(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		remember_settings(&instance.instance_id, settings);
+		render_metric(instance, Metric::Month, RenderMode::Cost, "MONTH", false, *settings).await;
 		Ok(())
 	}
 
-	async fn key_up(&self, instance: &Instance, _settings: &Self::Settings) -> OpenActionResult<()> {
-		render_metric(instance, Metric::Month, RenderMode::Cost, "MONTH", true).await;
+	async fn key_up(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		render_metric(instance, Metric::Month, RenderMode::Cost, "MONTH", true, *settings).await;
+		Ok(())
+	}
+
+	async fn did_receive_settings(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		remember_settings(&instance.instance_id, settings);
+		render_metric(instance, Metric::Month, RenderMode::Cost, "MONTH", false, *settings).await;
 		Ok(())
 	}
 }
@@ -366,15 +418,22 @@ struct TokensAction;
 #[async_trait]
 impl Action for TokensAction {
 	const UUID: ActionUuid = "com.achoobert.claudeusage.tokens";
-	type Settings = EmptySettings;
+	type Settings = DisplaySettings;
 
-	async fn will_appear(&self, instance: &Instance, _settings: &Self::Settings) -> OpenActionResult<()> {
-		render_metric(instance, Metric::Today, RenderMode::Tokens, "TOKENS", false).await;
+	async fn will_appear(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		remember_settings(&instance.instance_id, settings);
+		render_metric(instance, Metric::Today, RenderMode::Tokens, "TOKENS", false, *settings).await;
 		Ok(())
 	}
 
-	async fn key_up(&self, instance: &Instance, _settings: &Self::Settings) -> OpenActionResult<()> {
-		render_metric(instance, Metric::Today, RenderMode::Tokens, "TOKENS", true).await;
+	async fn key_up(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		render_metric(instance, Metric::Today, RenderMode::Tokens, "TOKENS", true, *settings).await;
+		Ok(())
+	}
+
+	async fn did_receive_settings(&self, instance: &Instance, settings: &Self::Settings) -> OpenActionResult<()> {
+		remember_settings(&instance.instance_id, settings);
+		render_metric(instance, Metric::Today, RenderMode::Tokens, "TOKENS", false, *settings).await;
 		Ok(())
 	}
 }
@@ -387,7 +446,8 @@ impl Action for TokensAction {
 async fn tick_action(uuid: ActionUuid, metric: Metric, mode: RenderMode, label: &str) {
 	let visible = visible_instances(uuid).await;
 	for instance in visible {
-		render_metric(&instance, metric, mode, label, false).await;
+		let settings = recall_settings(&instance.instance_id);
+		render_metric(&instance, metric, mode, label, false, settings).await;
 	}
 }
 
@@ -449,15 +509,31 @@ mod tests {
 
 	#[test]
 	fn render_shows_label_and_amount() {
-		let svg = render_svg("TODAY", "$74.75");
+		let svg = render_svg("TODAY", "$74.75", DisplaySettings::default());
 		assert!(svg.contains("$74.75"));
 		assert!(svg.contains("TODAY"));
 	}
 
 	#[test]
 	fn data_uri_is_svg() {
-		let uri = to_data_uri(&render_svg("TODAY", "$0.00"));
+		let uri = to_data_uri(&render_svg("TODAY", "$0.00", DisplaySettings::default()));
 		assert!(uri.starts_with("data:image/svg+xml;base64,"));
+	}
+
+	#[test]
+	fn text_scale_increases_font_sizes() {
+		let normal = render_svg("TODAY", "$0.00", DisplaySettings::default());
+		let large = render_svg("TODAY", "$0.00", DisplaySettings { bold: false, text_scale: 1.5 });
+		assert!(normal.contains("font-size=\"12\""));
+		assert!(large.contains("font-size=\"18\""));
+	}
+
+	#[test]
+	fn bold_setting_changes_label_weight() {
+		let plain = render_svg("TODAY", "$0.00", DisplaySettings::default());
+		let bold = render_svg("TODAY", "$0.00", DisplaySettings { bold: true, text_scale: 1.0 });
+		assert!(plain.contains("font-weight=\"600\""));
+		assert!(bold.contains("font-weight=\"bold\""));
 	}
 
 	#[test]

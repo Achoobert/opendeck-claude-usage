@@ -44,7 +44,12 @@ Run `make package` to assemble the plugin bundle and zip it into `com.achoobert.
 
 ## Configuration
 
-None. There's no property inspector setting — the plugin just reads `~/.claude` on the machine it runs on. Press a key to force an immediate refresh; otherwise each key refreshes on a 5-minute cycle.
+No API key or file path to set — the plugin just reads `~/.claude` on the machine it runs on. Each key's property inspector does offer display formatting, though:
+
+- **Text size** — Normal / Large / Extra large.
+- **Bold** — bolds the label text (the amount is already bold).
+
+These are per-key settings, so "Today's Spend" and "Today's Tokens" can each have their own size/weight. Press a key to force an immediate refresh; otherwise each key refreshes on a 5-minute cycle.
 
 ## Development
 
