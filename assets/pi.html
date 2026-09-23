@@ -1,88 +1,20 @@
 <!DOCTYPE html>
 <html lang="en">
 	<head>
-		<script>
-			let websocket = null;
-			let context = null;
-
-			function connectOpenActionSocket(inPort, inPropertyInspectorUUID, inRegisterEvent, inInfo, inActionInfo) {
-				const actionInfo = JSON.parse(inActionInfo);
-				context = actionInfo.context;
-				websocket = new WebSocket("ws://localhost:" + inPort);
-				websocket.onopen = () => {
-					websocket.send(JSON.stringify({
-						event: inRegisterEvent,
-						uuid: inPropertyInspectorUUID,
-					}));
-				};
-
-				const settings = actionInfo.payload.settings || {};
-				const apiKey = document.getElementById("apiKey");
-
-				apiKey.value = settings.api_key ?? "";
-
-				websocket.onmessage = (event) => {
-					const data = JSON.parse(event.data);
-					if (data.event == "didReceiveSettings") {
-						const s = data.payload.settings || {};
-						if (s.api_key != null) apiKey.value = s.api_key;
-					}
-				};
-			}
-
-			function update() {
-				if (!websocket || !context) return;
-				websocket.send(JSON.stringify({
-					event: "setSettings",
-					context: context,
-					payload: {
-						api_key: document.getElementById("apiKey").value,
-					},
-				}));
-			}
-
-			const connectElgatoStreamDeckSocket = connectOpenActionSocket;
-		</script>
-
 		<style>
 			* {
 				font-family: system-ui, sans-serif;
-				font-size: 16px;
-				color: oklch(92.2% 0 0);
+				font-size: 13px;
+				color: oklch(78% 0 0);
 			}
 			body {
 				margin: 16px;
 				background-color: oklch(26.9% 0 0);
 			}
-			label {
-				display: block;
-				margin-bottom: 4px;
-				margin-top: 12px;
-				font-size: 13px;
-				color: oklch(78% 0 0);
-			}
-			select,
-			input {
-				width: 100%;
-				box-sizing: border-box;
-				padding: 6px;
-				background-color: oklch(37.1% 0 0);
-				border: 1px solid oklch(43.9% 0 0);
-				border-radius: 8px;
-			}
-			.hint {
-				font-size: 12px;
-				color: oklch(70% 0 0);
-				margin-top: 4px;
-			}
 		</style>
 	</head>
 
 	<body>
-		<div>
-			<label for="apiKey">OpenRouter API Key</label>
-			<input id="apiKey" oninput="update();" type="password" placeholder="sk-or-..." autocomplete="off" />
-			<div class="hint">Requires a management key. The plugin adds the "Bearer " prefix. Stored in this action's settings.</div>
-		</div>
+		<div>Reads local Claude Code usage from <code>~/.claude</code> on this machine. No configuration needed.</div>
 	</body>
 </html>

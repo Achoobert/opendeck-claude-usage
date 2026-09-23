@@ -1,30 +1,46 @@
 {
-	"Name": "OpenRouter Credits",
-	"Author": "ImDevinC",
+	"Name": "Claude Usage",
+	"Author": "achoobert",
 	"Version": "0.0.1",
-	"Category": "OpenRouter",
+	"Category": "Claude",
 	"Icon": "icon",
-	"CategoryIcon": "openrouter",
+	"CategoryIcon": "category-icon",
 	"OS": [{ "Platform": "windows" }, { "Platform": "mac" }, { "Platform": "linux" }],
 	"CodePaths": {
-		"x86_64-pc-windows-msvc": "oaopenrouter-credits-x86_64-pc-windows-msvc.exe",
-		"x86_64-apple-darwin": "oaopenrouter-credits-x86_64-apple-darwin",
-		"aarch64-apple-darwin": "oaopenrouter-credits-aarch64-apple-darwin",
-		"x86_64-unknown-linux-gnu": "oaopenrouter-credits-x86_64-unknown-linux-gnu",
-		"aarch64-unknown-linux-gnu": "oaopenrouter-credits-aarch64-unknown-linux-gnu"
+		"x86_64-pc-windows-msvc": "oaclaude-usage-x86_64-pc-windows-msvc.exe",
+		"x86_64-apple-darwin": "oaclaude-usage-x86_64-apple-darwin",
+		"aarch64-apple-darwin": "oaclaude-usage-aarch64-apple-darwin",
+		"x86_64-unknown-linux-gnu": "oaclaude-usage-x86_64-unknown-linux-gnu",
+		"aarch64-unknown-linux-gnu": "oaclaude-usage-aarch64-unknown-linux-gnu"
 	},
-	"CodePathWin": "oaopenrouter-credits-x86_64-pc-windows-msvc.exe",
-	"CodePathMac": "oaopenrouter-credits-x86_64-apple-darwin",
-	"CodePathLin": "oaopenrouter-credits-x86_64-unknown-linux-gnu",
+	"CodePathWin": "oaclaude-usage-x86_64-pc-windows-msvc.exe",
+	"CodePathMac": "oaclaude-usage-aarch64-apple-darwin",
+	"CodePathLin": "oaclaude-usage-x86_64-unknown-linux-gnu",
 	"PropertyInspectorPath": "pi.html",
 	"Actions": [
 		{
-			"UUID": "com.imdevinc.openroutercredits.credits",
-			"Name": "Credits",
+			"UUID": "com.achoobert.claudeusage.today",
+			"Name": "Today's Spend",
 			"Icon": "actions/icon",
-			"Tooltip": "Shows your remaining OpenRouter credits as currency",
+			"Tooltip": "Shows an estimated USD cost of today's local Claude Code usage",
 			"Controllers": ["Keypad"],
-			"States": [{ "Title": "Credits", "ShowTitle": false }]
+			"States": [{ "Title": "Today", "ShowTitle": false }]
+		},
+		{
+			"UUID": "com.achoobert.claudeusage.month",
+			"Name": "Month-to-Date Spend",
+			"Icon": "actions/icon",
+			"Tooltip": "Shows an estimated USD cost of this month's local Claude Code usage",
+			"Controllers": ["Keypad"],
+			"States": [{ "Title": "Month", "ShowTitle": false }]
+		},
+		{
+			"UUID": "com.achoobert.claudeusage.tokens",
+			"Name": "Today's Tokens",
+			"Icon": "actions/icon",
+			"Tooltip": "Shows total tokens used by local Claude Code today",
+			"Controllers": ["Keypad"],
+			"States": [{ "Title": "Tokens", "ShowTitle": false }]
 		}
 	]
 }

@@ -1,13 +1,17 @@
-PLUGIN_DIR := com.imdevinc.openroutercredits.sdPlugin
+PLUGIN_DIR := com.achoobert.claudeusage.sdPlugin
 BUNDLE_ID := $(basename $(PLUGIN_DIR))
-PACKAGE := oaopenrouter-credits
+PACKAGE := oaclaude-usage
 
 UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+# Rust target triples use "aarch64", not Darwin/Linux's "arm64".
+ARCH := $(patsubst arm64,aarch64,$(UNAME_M))
+
 ifeq ($(UNAME_S),Darwin)
-	TRIPLE := $(shell uname -m)-apple-darwin
+	TRIPLE := $(ARCH)-apple-darwin
 	OPENDECK_CONFIG := $(HOME)/Library/Application Support/OpenDeck
 else
-	TRIPLE := $(shell uname -m)-unknown-linux-gnu
+	TRIPLE := $(ARCH)-unknown-linux-gnu
 	OPENDECK_CONFIG := $(or $(XDG_CONFIG_HOME),$(HOME)/.config)/opendeck
 endif
 
@@ -28,7 +32,7 @@ stage: build
 	cp assets/manifest.json $(PLUGIN_DIR)/manifest.json
 	cp assets/pi.html $(PLUGIN_DIR)/pi.html
 	cp assets/icon.svg $(PLUGIN_DIR)/icon.svg
-	cp assets/openrouter.svg $(PLUGIN_DIR)/openrouter.svg
+	cp assets/category-icon.svg $(PLUGIN_DIR)/category-icon.svg
 	cp assets/actions/icon.svg $(PLUGIN_DIR)/actions/icon.svg
 
 package: stage

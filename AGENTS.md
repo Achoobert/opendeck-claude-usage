@@ -2,58 +2,63 @@
 
 ## Project purpose
 
-An [OpenAction](https://openaction.amankhanna.me) plugin for [OpenDeck](https://github.com/nekename/OpenDeck) that shows [OpenRouter](https://openrouter.ai) remaining credits on a stream-deck-style key.
+An [OpenAction](https://openaction.amankhanna.me) plugin for [OpenDeck](https://github.com/nekename/OpenDeck) that shows local [Claude Code](https://claude.com/product/claude-code) usage on a stream-deck-style key. Personal fork of an OpenRouter-credits plugin, migrated to Claude — see "Why local files, not an API" below for the reasoning.
 
-The action queries the OpenRouter credits API, computes `total_credits - total_usage`, and renders the balance as USD currency (for example `$74.75`).
+Three actions read the same transcript files Claude Code writes to `~/.claude/projects/**/*.jsonl` on this machine and total up token usage / estimated cost over a time window:
+
+- `com.achoobert.claudeusage.today` — today's estimated USD cost.
+- `com.achoobert.claudeusage.month` — month-to-date estimated USD cost.
+- `com.achoobert.claudeusage.tokens` — today's total token count.
+
+## Why local files, not an API
+
+Anthropic has no public "remaining balance" endpoint (confirmed via search when this was migrated from OpenRouter — the Console shows it, there's no API). The Admin `usage_report`/`cost_report` API exists but needs an org-admin key (`sk-ant-admin...`), which most individual users don't have. The user this plugin was built for is not an org admin, but does run Claude Code on the same machine as OpenDeck — so this plugin reads Claude Code's own local transcript files instead of calling any API. No key, no network call, no admin access needed; the tradeoff is it only sees usage that happened on this machine, and costs are an estimate from a hardcoded pricing table (see below), not a real invoice.
 
 ## Architecture
 
 - **Rust backend** (`src/main.rs`) using the official `openaction` crate (2.x). This is the recommended OpenAction language. Do not rewrite in another language unless asked.
-- **Single action** with UUID `com.imdevinc.openroutercredits.credits`, defined in `assets/manifest.json`.
-- **Property inspector** (`assets/pi.html`): a webview that stores the `api_key` in the action's settings via the OpenAction WebSocket (`setSettings` event). The backend reads it in `will_appear` / `did_receive_settings`.
-- **Rendering**: the backend builds an SVG string and sends it to the key with `instance.set_image(...)` as a base64 data URI (`data:image/svg+xml;base64,...`). OpenDeck rasterises SVG at 144x144 in its frontend canvas, so SVG works on hardware. The manifest sets `ShowTitle: false` because the SVG carries all text.
-- **Manifest naming**: the plugin's manifest `Name` is `OpenRouter Credits` (shown in OpenDeck's Plugin Manager and the marketplace catalogue; the catalogue `name` must match it exactly). The action's `Name` is `Credits` under the `OpenRouter` category. `CategoryIcon` (`assets/openrouter.svg`) is the category icon. Keep the stage/install copies in sync if assets change.
-- **Data source**: `GET https://openrouter.ai/api/v1/credits` with header `Authorization: Bearer <api_key>`. A management key is required. Response has `data.{total_credits,total_usage}`.
+- **Three actions**, one struct each (`TodayAction`, `MonthAction`, `TokensAction`), sharing a common `render_metric` helper. `assets/manifest.json` lists all three under the `Claude` category.
+- **Property inspector** (`assets/pi.html`): static text only, no settings. There's nothing to configure — no API key, no per-instance state.
+- **Data source**: `~/.claude/projects/<project>/<session>.jsonl` — Claude Code's own transcript files. `dirs::home_dir()` locates the home dir cross-platform. Each JSONL line is one event; usage-bearing lines have `message.model` and `message.usage.{input_tokens,output_tokens,cache_creation_input_tokens,cache_read_input_tokens}` plus a top-level `timestamp` (RFC3339 UTC). Most lines are other event types (tool calls, meta, attachments) and are skipped — `parse_usage_line` returns `None` for anything that doesn't parse as a usage event, not an error.
+- **Perf shortcut**: before opening a transcript file, `scan_usage` checks its mtime against the window start (`since`) and skips it if the file hasn't been touched since — an append-only transcript with no recent writes can't contain rows inside the window.
+- **Pricing table** (`model_pricing`): a hardcoded `$/MTok` (input, output) table keyed by model id, covering current Claude models plus common legacy/dated ids that might still appear in older transcripts. Unknown models contribute to the token total but $0 to cost (logged at debug level) rather than erroring — new models will need a new table entry to price correctly. Cache tokens are billed at the standard multiples of the input rate: `cache_creation_input_tokens` × 1.25, `cache_read_input_tokens` × 0.1 (`CACHE_WRITE_MULTIPLIER`/`CACHE_READ_MULTIPLIER`).
+- **Rendering**: unchanged from the OpenRouter version — an SVG string sent to the key via `instance.set_image(...)` as a base64 data URI. `render_svg(label, amount)` now takes the label as a parameter (`"TODAY"`/`"MONTH"`/`"TOKENS"`) instead of a hardcoded `"CREDITS"`.
 
 ## How it stays live
 
-- A `tokio::spawn` background task ticks every 60s (`tick_instances`).
-- It refetches from the API at most once per 5 minutes (per instance, tracked by `last_fetch: Instant`). Instances that are not stale are skipped.
-- Pressing the key forces an immediate refetch + render.
-- `set_credit_image` stores fresh fetch results back into the shared `INSTANCES` map so the ticker does not double-fetch.
+- A `tokio::spawn` background task ticks every 60s (`tick_instances`), which calls `tick_action` once per action UUID.
+- `tick_action` fetches `visible_instances(uuid)` and skips entirely if none are visible — no filesystem scan happens for a metric no key is currently showing.
+- Usage totals are cached **per `Metric`** (`Today`/`Month`), not per key instance, since multiple keys can show the same window (e.g. "Today's Spend" and "Today's Tokens" both read `Metric::Today`) — the first `render_metric` call in a tick repopulates the shared cache; the rest hit it. `REFETCH_INTERVAL` (5 min) governs staleness.
+- Pressing a key forces an immediate rescan (`force: true` in `get_usage`), bypassing the cache.
 
 ## Key code conventions and gotchas
 
-- **State tracking**: `INSTANCES` is a `static LazyLock<Mutex<HashMap<InstanceId, InstanceState>>>` keyed by `instance.instance_id`, updated in `will_appear` / `will_disappear` / `did_receive_settings`. The crate's own `Instance.settings_json` is `pub(crate)` and not readable from the plugin, so this map is how the ticker knows each instance's settings.
-- **Do not hold the `INSTANCES` lock across `.await`**: `std::sync::MutexGuard` is not `Send`, so a guard held across an await fails to compile in spawned tasks and `async_trait` handlers. Snapshot (clone) state inside a scope, then await outside it.
+- **`INSTANCES`-style per-instance state is gone.** The OpenRouter version tracked per-instance API keys in a `Mutex<HashMap<InstanceId, InstanceState>>`. This version has no per-instance settings, so the cache is keyed by `Metric` instead — simpler, and correctly shares one scan across keys showing the same window.
+- **`std::sync::MutexGuard` is not `Send`**: still applies to `USAGE_CACHE`. Don't hold the lock across an `.await` — the existing code only touches it inside a scoped block before or after the async filesystem work.
 - **SVG format strings**: use `r##"..."##` raw strings, never `r#"..."#`. The hex colors (`fill="#ffffff"`) contain the byte sequence `"#` which prematurely terminates `r#"..."#` and causes confusing `prefix ... is unknown` compile errors.
 - **Truncate error text char-safely**: use `message.chars().take(16).collect()`, not `&message[..16]` (panics on multi-byte boundaries).
-- **API JSON is snake_case**: the credits endpoint sends `total_credits` and `total_usage`, matching the Rust field names. No `rename_all` is needed here.
-- **Pure helpers are testable**: `remaining_credits`, `format_currency`, `render_svg*`, `to_data_uri` are side-effect free. Add unit tests for any changes to them.
+- **Timestamps are UTC, windows are local.** `start_of_today`/`start_of_month` compute local-time boundaries (`chrono::Local`) then convert to UTC for comparison against transcript timestamps, so "today" means the user's local calendar day, not UTC's.
+- **Pure helpers are testable**: `parse_usage_line`, `model_pricing`, `estimate_cost`, `format_currency`, `format_tokens`, `render_svg*`, `to_data_uri` are side-effect free. Add unit tests for any changes to them — especially new pricing table entries.
 - Tabs for indentation (matches the `openaction` crate examples and this repo).
+- **Makefile arch mapping**: `uname -m` on Apple Silicon prints `arm64`, but Rust/`CodePaths` target triples use `aarch64`. The `Makefile` remaps this (`ARCH := $(patsubst arm64,aarch64,$(UNAME_M))`) — don't revert to a bare `uname -m` triple or local `make install` produces a binary name OpenDeck can't find on Apple Silicon.
 
 ## Commands
 
 ```sh
 cargo build --release     # build
-cargo test --release      # unit tests (calculation/formatting/render logic)
+cargo test --release      # unit tests (parsing/pricing/formatting logic)
 cargo clippy --release    # lint; must be clean before finishing
-make stage                # assemble com.imdevinc.openroutercredits.sdPlugin/
-make package              # stage + zip com.imdevinc.openroutercredits.zip
-make install              # stage + copy into OpenDeck plugins dir
-make clean                # remove build artifacts, staged plugin dir, and package zip
+make stage                # assemble com.achoobert.claudeusage.sdPlugin/
+make package               # stage + zip com.achoobert.claudeusage.zip
+make install               # stage + copy into OpenDeck plugins dir
+make clean                 # remove build artifacts, staged plugin dir, and package zip
 ```
 
-OpenDeck plugins directory: Linux `~/.config/opendeck/plugins/` (or `$XDG_CONFIG_HOME/opendeck/plugins/`), macOS `~/Library/Application Support/OpenDeck/plugins/`.
+OpenDeck plugins directory: Linux `~/.config/opendeck/plugins/` (or `$XDG_CONFIG_HOME/opendeck/plugins/`), macOS `~/Library/Application Support/OpenDeck/plugins/` (case-insensitive on APFS, same as `~/Library/Application Support/opendeck/plugins/`).
 
 ## Distribution notes
 
-- Manifest `CodePaths`/`CodePathWin`/`CodePathMac`/`CodePathLin` list the five standard platform triples (`x86_64`/`aarch64` × windows/mac/linux). The binary is named `oaopenrouter-credits-<target-triple>`.
-- **Releases are PR-label driven** (modeled on `pd-slack`). Every PR must carry exactly one of the `major`/`minor`/`patch` labels; `.github/workflows/pr.yaml` validates this via the shared reusable `imdevinc/imdevinc/.github/workflows/shared-validate-semver-tags.yaml@v1`. Enforce it with branch protection requiring that check.
-- On merge to `main`, `.github/workflows/build.yml` runs: `jefflinse/pr-semver-bump` (bump mode) derives the next version from the merged PR's label and tags it; the five triples are built natively; the bundle is assembled into `com.imdevinc.openroutercredits.zip`. CI then writes the new version back into `Cargo.toml` and `assets/manifest.json` (committed to `main` as `github-actions[bot]`), force-updates the `vX.Y.Z` tag, and creates the GitHub Release with the zip. A merge without a release label fails the workflow and produces no release.
-- Release tags must match the manifest `Version` (OpenDeck strips a leading `v` and compares). `Cargo.toml`/`assets/manifest.json` hold the seed version (`0.0.1`); after the first release the tag is the source of truth and CI keeps the files in sync.
-- The release asset is named `<bundle-id>.zip` (`com.imdevinc.openroutercredits.zip`), matching the convention used by other native plugins.
-- The plugin is listed in the OpenAction Marketplace registry (`OpenActionAPI/plugins` `catalogue.json`) under the bundle id `com.imdevinc.openroutercredits` in the "Native OpenAction plugins" section, with `name` = manifest `Name`, `author` = `ImDevinC`, and `repository` = `https://github.com/ImDevinC/opendeck-openrouter-usage`. Keep the catalogue entry and its icon (`icons/com.imdevinc.openroutercredits.png`) in sync with the manifest if anything changes; the repo must keep the `openaction` topic.
+This is a personal local fork — it is **not** published to the OpenAction marketplace, and the bundle id (`com.achoobert.claudeusage`) is not registered in the `OpenActionAPI/plugins` catalogue. The `.github/workflows/*.yaml` files inherited from the OpenRouter version (PR-label-driven release automation, multi-platform binary builds, marketplace catalogue sync) are out of scope for this fork's goal (local install only) and haven't been updated to match the new bundle id/package name — treat them as unmaintained until/unless this plugin is ever published for real.
 
 ## Docs maintenance
 
